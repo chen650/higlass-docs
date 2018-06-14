@@ -84,29 +84,24 @@ The passed in ``viewUid`` should refer to a view which is present. If it
 doesn't, an exception will be thrown.
 
 
-goTo(view,chr1,s1,e1,chr2,s2,e2,animateTime): Zoom to a genomic location
+zoomTo(viewUid,start1,end1,start2,end2,animateTime): Zoom to a data location
 --------------------------------------------------------------------------------
 
-Change the current view port to a certain genomic location. When ``animate`` is true HiGlass transitions from the current to the new location smoothly.
+Change the current view port to a certain data location.  When ``animateTime`` is
+greater than 0, animate the transition.
+
+If working with genomic data, a chromosome info file will need to be used in
+order to calculate "data" coordinates from chromosome coordinates. "Data"
+coordinates are simply the coordinates as if the chromosomes were placed next
+to each other.
 
 .. code-block:: javascript
-
-  hgv.goTo(
-    viewUid,
-    chrom1,
-    start1,
-    end1,
-    chrom2,
-    start2,
-    end2,
-    animateTime = 3000,
-  );
 
 **Example:**
 
 .. code-block:: javascript
 
-  hgv.goTo('v1', 'chr1', 0, 1, 'chr2', 0, 1, 500);
+  hgv.goTo('v1', 1000000,1000000,2000000,2000000, 500);
 
 activateTool(mouseTool): Select a mouse tool
 --------------------------------------------
@@ -138,17 +133,13 @@ HiGlass exposes the following event, which one can subscribe to via this method:
 
   hgv.on(eventName, callback, viewId, callbackId)
 
-**location:** Returns an object containing the domains and ranges of the
-current x and y scales.  The domain corresponds to the visible data limits
-while the ranges correspond to the pixel limits of the selected view. The
-notation is derived from D3's definition of scale domains and ranges.
+**location:** Returns a BEDPE array of the current view port.
 
 .. code-block:: javascript
 
-    { xDomain: [0,10000], xRange: [0,400], yDomain: [0,10000], yRange: [0,400] }
+  ["chr1", 229372197, "chrM", 16571, "chr1", 1, "chrM", 16571]
 
-**rangeSelection:** Returns a BED- (1D) or BEDPE (1d) array of the selected
-data and genomic range (if chrom-sizes are available)
+**rangeSelection:** Returns a BED- (1D) or BEDPE (1d) array of the selected data and genomic range (if chrom-sizes are available)
 
 .. code-block:: javascript
 
@@ -236,15 +227,15 @@ get(prop, viewId): Instant getter for event data
 
 Naturally, event listeners only return news once an event has been published but sometimes one needs to get the data at a certain time. The get method returns the current value of an event without having to wait for the event to fire.
 
-HiGlass provides a set of accessors and exporters to retrieve data from HiGlass or to export its state as a viewconf, SVG or PNG:
+Additionally, it's possible to retrieve a png or svg snapshot of the current view using ``png`` and ``svg`` as ``prop`` respectively. The png snapshot comes in form of a data URI and the svg snapshot is a XML string.
 
 .. code-block:: javascript
 
-  const currentLocationOfViewId = hgv.getLocation('viewId');
-  const currentRangeSelection = hgv.getRangeSelection();
-  const currentViewConfig = hgv.exportAsViewConfString();
-  const pngSnapshot = hgv.exportAsPng();  // Data URI
-  const svgSnapshot = hgv.exportAsSvg();  // XML string
+  const currentLocationOfViewId = hgv.get('location', 'viewId');
+  const currentRangeSelection = hgv.get('rangeSelection');
+  const currentViewConfig = hgv.get('viewConfig');
+  const pngSnapshot = hgv.get('png');  // Data URI
+  const svgSnapshot = hgv.get('svg');  // XML string
 
 shareViewConfigAsLink(url): Get sharable link for current view config
 ---------------------------------------------------------------------
@@ -310,8 +301,8 @@ and styling options.
 Show a specific genomic location
 --------------------------------
 
-Say we want to have a viewconf which was centered on the gene OSR1. It's
-location is roughly between positions 19,500,000 and 19,600,000 on chromosome 7
+Say we want to have a viewconf which was centered on the gene OSR1. Its
+location is roughly between positions 19,500,000 and 19,600,000 on chromosome 2
 of the hg19 assembly. So what should ``initialXDomain`` be set to in order to
 show this gene?
 
@@ -355,3 +346,185 @@ Docstrings
 ----------
 
 All functions should be annotated with a docstring in the `JSDoc style <http://usejsdoc.org/>`_.
+
+
+Track Documentation
+*******************
+
+Each track in HiGlass is written in a Javascript class. This class is
+responsible for requesting data from the server as well as for rendering it.
+The interface between the `viewconfig` definition of the views and the actual
+track rendering is the `track-type`. In `app/scripts/TrackRenderer.js`, the
+value of `track-type` is used to instantiate a TrackObject. `TrackRenderer`
+then interacts with this track object to let it know when it has been resized
+and what the current zoom level is.
+
+Due to the variety of `track types <track_types.html>`_ available in HiGlass,
+there are different ways in which data can be rendered and manipulated.
+
+Adding new track types
+**********************
+
+To add a new track type, we first need a data source and a new
+definition. To begin, we can create a new test page to work
+with.
+
+.. code-block:: bash
+
+    cp app/test2.html app/testx.html
+
+Within this page will be a sample viewconfig, that we need to add our new track
+definition to. In this example, we'll be adding a 1D track. This just means
+that it can only be zoomed into in one dimension. We'll give it a type of
+``horizontal-multivec`` and add it to the list of top tracks with the bare
+minimum of attributes. The tilesetUid was taken from the `higlass server new
+filetypes section <higlass_server.html#new-filetypes>`_.
+
+
+.. code-block:: javascript
+
+        "top": [
+                  {
+            "server": "http://localhost:8000/api/v1",
+            "tilesetUid": "RAh2nvU9THezcVuxBU3ioQ",
+            "type": "horizontal-multivec",
+            "height": 200,
+            "position": "top"
+          }
+        ],
+
+We can start higlass:
+
+.. code-block:: bash
+
+    npm install
+    npm start
+
+And then navigate to the test web page: http://localhost:8080/testx.html
+Upon opening the developer console, we'll see an error message:
+
+```
+WARNING: unknown track type: horizontal-multivec
+```
+
+This is because HiGlass doesn't know how to handle this track type. In
+this example, we'll give it a way of handling it.
+
+First, we need to define this track type in the ``TRACKS_INFO`` array in ``app/scripts/tracks-info.js``:
+
+.. code-block:: javascript
+
+  {
+    type: 'horizontal-multivec',
+    datatype: ['multivec'],
+    local: false,
+    orientation: '1d-horizontal',
+    thumbnail: null,
+    availableOptions: ['labelPosition', 'labelColor', 'valueScaling', 'labelTextOpacity', 'labelBackgroundOpacity', 'trackBorderWidth', 'trackBorderColor', 'trackType'],
+    defaultOptions: {
+      labelPosition: 'topLeft',
+      labelColor: 'black',
+      labelTextOpacity: 0.4,
+      valueScaling: 'linear',
+      trackBorderWidth: 0,
+      trackBorderColor: 'black',
+    },
+  },
+
+It has all of the standard track options, is horizontal, etc...
+
+Now if we reload our test page, we still get the same warning. This is because
+we don't actually know how to draw this track. We need to create a class which
+knows how to draw this track type. We can do that by creating a new file in
+``app/scripts`` called ``HorizontalMultivecTrack.js``.
+
+The easiest way to do this is to start with an existing track type and copy it.
+This example uses a HeatmapTrack as a template. For other types of data, it's
+best to start with a track that is similar to the type that you are trying to
+create. A list of track types can be found in the `track types section of this
+documentation <track_types.html>`_.
+
+.. code-block:: bash
+
+    cp app/scripts/HeatmapTiledPixiTrack.js app/scripts/HorizontalMultivecTrack.js
+
+Here we need to change the name of the track and have it extend the HeatmapTrack:
+
+.. code-block:: bash
+
+    export class HorizontalMultivecTrack extends HeatmapTiledPixiTrack
+
+Now we can register the new track type in `TrackRenderer.js:createTrackObject`:
+
+.. code-block:: javascript
+
+      case 'horizontal-multivec':
+        return new HorizontalMultivecTrack(
+          this.pStage,
+          dataConfig,
+          handleTilesetInfoReceived,
+          track.options,
+          () => this.currentProps.onNewTilesLoaded(track.uid),
+          this.svgElement,
+          () => this.currentProps.onValueScaleChanged(track.uid),
+          newOptions =>
+            this.currentProps.onTrackOptionsChanged(track.uid, newOptions),
+        );
+
+And add it to the imports at the top:
+
+.. code-block:: javascript
+
+    import HorizontalMultivecTrack from './HorizontalMultivecTrack';
+
+Reloading our test page will now output a series of errors which we will fix
+in `HorizontalMultivecTrack`. Here's the steps.
+
+1. Replace ``tileToLocalId`` and ``tileToRemoteId`` with those from
+   ``HorizontalLine1DPixiTrack``.  We do this because the ones we copied from
+   the HeatmapTrack assume that there will be a data transform associated with
+   the ID. This simple datatype has no associated transforms and thus only
+   needs to encode the tile position in the ID.
+
+2. Change ``calculateZoomLevel`` to only use the x domain in calculating the zoom
+   level.
+
+3. Change ``calculateVisibleTiles`` to only use the x domain in calculating the
+   visible tiles.
+
+4. Change ``tileDataToCanvas`` to change the width of the data to match that
+   returned in the tileset info.
+
+5. Change the ``zoomed`` function to maintain the the view at the origin.
+
+6. Change ``setSpriteProperties`` to position the sprite on only the x axis.
+
+
+
+Other Documentation
+*******************
+
+
+Line Track Scaling
+------------------
+
+
+1D tracks can either be linearly or log scaled. Linear scaling denotes a linear
+mapping between the values and their position on the track. Log scaling means
+that we take the log of the values before positioning them.
+
+Because the dataset may contain very small or even zero values, we add a
+pseudocount equal to the median visible value to ensure that finer details in
+the data are not drowned out by extreme small values.
+
+The code for this can be found in ``HorizontalLine1DPixiTrack.drawTile``.
+
+
+Interface
+---------
+
+visibleAndFetchedIds: Tile ids that correspond to tiles which are both visible
+in the current viewport as well as fetched from the server.
+
+visibleTileIds: Tiles which should be visible in the current viewport based on
+the current viewport. Usually set by ``calculateVisibleTiles``.
